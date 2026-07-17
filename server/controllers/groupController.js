@@ -4,9 +4,11 @@ import { nanoid } from "nanoid";
 import Expense from "../models/Expense.js";
 import Group from "../models/Group.js";
 import Member from "../models/Member.js";
+import { calculateLedger } from "../services/ledger.service.js";
 
 export const createGroup = async (req, res) => {
   try {
+    console.log(req.body);
     const { tripName, adminName, phone, adminPassword } = req.body;
 
     if (!tripName || !adminName || !phone || !adminPassword) {
@@ -748,6 +750,39 @@ export const deleteExpense = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Expense deleted successfully",
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const getGroupLedger = async (req, res) => {
+  try {
+    const { inviteCode } = req.params;
+
+    // Find the group
+    const group = await Group.findOne({ inviteCode });
+
+    if (!group) {
+      return res.status(404).json({
+        success: false,
+        message: "Group not found",
+      });
+    }
+
+    const { members, ledger } = await calculateLedger(group._id);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        members,
+        ledger,
+      },
     });
   } catch (error) {
     console.error(error);
