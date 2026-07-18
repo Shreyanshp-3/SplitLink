@@ -5,6 +5,7 @@ import {
   getAllExpenses,
   getGroupDashboard,
   getGroupLedger,
+  getGroupSettlements,
   joinGroup,
   loginMember,
 } from "../controllers/groupController.js";
@@ -17,6 +18,7 @@ router.post("/:inviteCode/login", loginMember);
 router.post("/:inviteCode/expenses", addExpense);
 router.get("/:inviteCode/expenses", getAllExpenses);
 router.get("/:inviteCode/ledger", getGroupLedger);
+router.get("/:inviteCode/settlements", getGroupSettlements);
 router.get("/:inviteCode/", getGroupDashboard);
 
 export default router;

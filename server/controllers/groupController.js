@@ -4,11 +4,12 @@ import { nanoid } from "nanoid";
 import Expense from "../models/Expense.js";
 import Group from "../models/Group.js";
 import Member from "../models/Member.js";
+import { buildExpenseParticipants } from "../services/expense-validation.service.js";
 import { calculateLedger } from "../services/ledger.service.js";
+import { generateSettlements } from "../services/settlement.service.js";
 
 export const createGroup = async (req, res) => {
   try {
-    console.log(req.body);
     const { tripName, adminName, phone, adminPassword } = req.body;
 
     if (!tripName || !adminName || !phone || !adminPassword) {
@@ -210,8 +211,24 @@ export const getGroupDashboard = async (req, res) => {
       });
     }
 
-    // Fetch group members
-    const members = await Member.find({ groupId: group._id }).select("_id name");
+    const [members, expenses, ledgerData, recentExpenses] = await Promise.all([
+      Member.find({ groupId: group._id }).select("_id name"),
+      Expense.find({ groupId: group._id }).select("totalAmount"),
+      calculateLedger(group._id),
+      Expense.find({ groupId: group._id })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .populate("paidBy", "_id name")
+        .populate("participants.memberId", "_id name"),
+    ]);
+    const totalGroupExpense = expenses.reduce(
+      (total, expense) => total + expense.totalAmount,
+      0
+    );
+    const outstandingAmount = ledgerData.members.reduce(
+      (total, member) => total + Math.max(member.netBalance, 0),
+      0
+    );
 
     return res.status(200).json({
       success: true,
@@ -221,11 +238,13 @@ export const getGroupDashboard = async (req, res) => {
         status: group.status,
         members,
         summary: {
-          totalGroupExpense: 0,
-          owedByYou: 0,
-          owedToYou: 0,
+          totalGroupExpense,
+          totalMembers: members.length,
+          totalExpenses: expenses.length,
+          settledAmount: totalGroupExpense - outstandingAmount,
+          outstandingAmount,
         },
-        recentExpenses: [],
+        recentExpenses,
       },
     });
   } catch (error) {
@@ -304,132 +323,18 @@ export const addExpense = async (req, res) => {
       });
     }
 
-    let expenseParticipants = [];
+    const validation = await buildExpenseParticipants({
+      groupId: group._id,
+      totalAmount,
+      splitType,
+      participants,
+    });
 
-    if (splitType === "EQUAL") {
-      if (participants.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "At least one participant is required",
-        });
-      }
-
-      const hasInvalidParticipant = participants.some(
-        (participantId) => !mongoose.isValidObjectId(participantId)
-      );
-
-      if (hasInvalidParticipant) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid participant",
-        });
-      }
-
-      console.log("Group ID:", group._id);
-      console.log("Participants:", participants);
-      console.log(
-        "Participant Types:",
-        participants.map((participant) => ({
-          value: participant,
-          type: typeof participant,
-        }))
-      );
-      console.log("Query Values:", {
-        ids: participants,
-        groupId: group._id,
-      });
-
-      const groupParticipants = await Member.find({
-        _id: { $in: participants },
-        groupId: group._id,
-      });
-
-      console.log("Found Participants:", groupParticipants.length);
-      console.log(
-        "Participant IDs Found:",
-        groupParticipants.map((participant) => ({
-          id: participant._id,
-          groupId: participant.groupId,
-          name: participant.name,
-        }))
-      );
-
-      if (groupParticipants.length !== participants.length) {
-        return res.status(400).json({
-          success: false,
-          message: "All participants must belong to this group",
-        });
-      }
-
-      const baseAmount = Math.floor(totalAmount / participants.length);
-      const remainder = totalAmount % participants.length;
-
-      expenseParticipants = participants.map((participantId, index) => ({
-        memberId: participantId,
-        amountOwed: baseAmount + (index < remainder ? 1 : 0),
-        isIncluded: true,
-        settled: false,
-      }));
+    if (validation.message) {
+      return res.status(400).json({ success: false, message: validation.message });
     }
 
-    if (splitType === "AMOUNT") {
-      if (participants.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "At least one participant is required",
-        });
-      }
-
-      const hasInvalidParticipant = participants.some(
-        (participant) =>
-          !participant.memberId ||
-          !mongoose.isValidObjectId(participant.memberId) ||
-          !Number.isInteger(participant.amountOwed) ||
-          participant.amountOwed < 0
-      );
-
-      if (hasInvalidParticipant) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid participant",
-        });
-      }
-
-      const participantIds = participants.map(
-        (participant) => participant.memberId
-      );
-
-      const groupParticipants = await Member.find({
-        _id: { $in: participantIds },
-        groupId: group._id,
-      });
-
-      if (groupParticipants.length !== participantIds.length) {
-        return res.status(400).json({
-          success: false,
-          message: "All participants must belong to this group",
-        });
-      }
-
-      const totalOwed = participants.reduce(
-        (sum, participant) => sum + participant.amountOwed,
-        0
-      );
-
-      if (totalOwed !== totalAmount) {
-        return res.status(400).json({
-          success: false,
-          message: "Participant amounts must equal total amount",
-        });
-      }
-
-      expenseParticipants = participants.map((participant) => ({
-        memberId: participant.memberId,
-        amountOwed: participant.amountOwed,
-        isIncluded: participant.amountOwed > 0,
-        settled: false,
-      }));
-    }
+    const expenseParticipants = validation.participants;
 
     const expense = await Expense.create({
       groupId: group._id,
@@ -564,108 +469,18 @@ export const updateExpense = async (req, res) => {
       });
     }
 
-    let expenseParticipants = [];
+    const validation = await buildExpenseParticipants({
+      groupId: expense.groupId,
+      totalAmount,
+      splitType,
+      participants,
+    });
 
-    if (splitType === "EQUAL") {
-      if (participants.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "At least one participant is required",
-        });
-      }
-
-      const hasInvalidParticipant = participants.some(
-        (participantId) => !mongoose.isValidObjectId(participantId)
-      );
-
-      if (hasInvalidParticipant) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid participant",
-        });
-      }
-
-      const groupParticipants = await Member.find({
-        _id: { $in: participants },
-        groupId: expense.groupId,
-      });
-
-      if (groupParticipants.length !== participants.length) {
-        return res.status(400).json({
-          success: false,
-          message: "All participants must belong to this group",
-        });
-      }
-
-      const baseAmount = Math.floor(totalAmount / participants.length);
-      const remainder = totalAmount % participants.length;
-
-      expenseParticipants = participants.map((participantId, index) => ({
-        memberId: participantId,
-        amountOwed: baseAmount + (index < remainder ? 1 : 0),
-        isIncluded: true,
-        settled: false,
-      }));
+    if (validation.message) {
+      return res.status(400).json({ success: false, message: validation.message });
     }
 
-    if (splitType === "AMOUNT") {
-      if (participants.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "At least one participant is required",
-        });
-      }
-
-      const hasInvalidParticipant = participants.some(
-        (participant) =>
-          !participant.memberId ||
-          !mongoose.isValidObjectId(participant.memberId) ||
-          !Number.isInteger(participant.amountOwed) ||
-          participant.amountOwed < 0
-      );
-
-      if (hasInvalidParticipant) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid participant",
-        });
-      }
-
-      const participantIds = participants.map(
-        (participant) => participant.memberId
-      );
-
-      const groupParticipants = await Member.find({
-        _id: { $in: participantIds },
-        groupId: expense.groupId,
-      });
-
-      if (groupParticipants.length !== participantIds.length) {
-        return res.status(400).json({
-          success: false,
-          message: "All participants must belong to this group",
-        });
-      }
-
-      const totalOwed = participants.reduce(
-        (sum, participant) => sum + participant.amountOwed,
-        0
-      );
-
-      if (totalOwed !== totalAmount) {
-        return res.status(400).json({
-          success: false,
-          message: "Participant amounts must equal total amount",
-        });
-      }
-
-      expenseParticipants = participants.map((participant) => ({
-        memberId: participant.memberId,
-        amountOwed: participant.amountOwed,
-        isIncluded: participant.amountOwed > 0,
-        settled: false,
-      }));
-    }
+    const expenseParticipants = validation.participants;
 
     expense.reason = reason;
     expense.totalAmount = totalAmount;
@@ -783,6 +598,34 @@ export const getGroupLedger = async (req, res) => {
         members,
         ledger,
       },
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const getGroupSettlements = async (req, res) => {
+  try {
+    const { inviteCode } = req.params;
+    const group = await Group.findOne({ inviteCode });
+
+    if (!group) {
+      return res.status(404).json({
+        success: false,
+        message: "Group not found",
+      });
+    }
+
+    const { members } = await calculateLedger(group._id);
+
+    return res.status(200).json({
+      success: true,
+      data: { settlements: generateSettlements(members) },
     });
   } catch (error) {
     console.error(error);
