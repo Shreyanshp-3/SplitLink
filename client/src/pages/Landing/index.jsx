@@ -1,7 +1,13 @@
-const Landing = () => (
-  <main className="verification-page">
-    <h1>SplitLink Frontend Initialized</h1>
-  </main>
-);
+import Navbar from "../../components/layout/Navbar";
+import Hero from "./Hero/index";
+
+const Landing = () => {
+  return (
+    <>
+      <Navbar />
+      <Hero />
+    </>
+  );
+};
 
 export default Landing;
