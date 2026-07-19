@@ -335,10 +335,13 @@ const CreateGroup = () => {
                 <Text fontSize="sm" color="gray.500">
                   Trip Name
                 </Text>
-
-                <Text fontWeight="bold" fontSize="lg">
-                  {groupData?.tripName}
-                </Text>
+<Text
+  fontWeight="bold"
+  fontSize="lg"
+  color="gray.800"
+>
+  {groupData?.tripName}
+</Text>
               </Box>
 
               <Box>
@@ -349,7 +352,7 @@ const CreateGroup = () => {
                 <Text
                   fontWeight="bold"
                   fontSize="2xl"
-                  color="blue.500"
+                  color="gray.800"
                   letterSpacing="2px"
                 >
                   {groupData?.inviteCode}
@@ -365,6 +368,7 @@ const CreateGroup = () => {
                   <Input
                     value={inviteLink}
                     isReadOnly
+                    color="gray.800"
                   />
 
                   <Button
