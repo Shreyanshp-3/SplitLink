@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 import {
   Box,
   Button,
@@ -35,6 +36,7 @@ const BASE_URL = import.meta.env.VITE_API_URL;
 
 const CreateGroup = () => {
   const toast = useToast();
+  const navigate = useNavigate();
 
   const { isOpen, onOpen, onClose } = useDisclosure();
 
@@ -389,7 +391,9 @@ const CreateGroup = () => {
               onClick={() => {
                 onClose();
 
-                // TODO: Navigate to the dashboard after the dashboard flow is implemented.
+                if (groupData?.inviteCode) {
+                  navigate(`/dashboard/${groupData.inviteCode}`);
+                }
               }}
             >
               Continue
